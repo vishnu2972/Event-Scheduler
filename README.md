@@ -52,6 +52,21 @@ npm run test
 ```
 This command runs the test cases defined in src/test/events.service.spec.ts.
 
+🧪 Postman Collection (Pre-configured)
+This project includes a ready-to-use Postman collection to help you test the API quickly without setting up requests manually.
+
+File Location
+postman_collection.json
+How to Use It:
+Open Postman.
+Click on "Import" (top-left).
+Select the file:
+postman_collection.json
+Click "Import".
+You will now see a collection named "Event Scheduler API" with the following pre-configured requests:
+POST /events – Create a new event
+GET /events/today – Fetch today’s events
+
 ## 📁 Data
 
 All created events are saved to `events.json` file.
