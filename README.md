@@ -37,6 +37,9 @@ npm run start
   "reminderMinutes": 30
 }
 ```
+To ensure reminders are set before the event start time, the 'reminderMinutes' attribute accepts
+only a positive integer between 0-60. This ensures that the reminder can only be few minutes before start.
+This value represents the number of minutes before the event's start time when the reminder should trigger.
 
 ### Get Today’s Events
 
@@ -47,7 +50,8 @@ npm run start
 ```bash
 npm run test
 ```
+This command runs the test cases defined in src/test/events.service.spec.ts.
 
 ## 📁 Data
 
-Events are saved to `events.json` file.
+All created events are saved to `events.json` file.

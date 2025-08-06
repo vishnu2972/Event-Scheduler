@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsNumber, Min, IsIn, IsISO8601 } from 'class-validator';
+import { IsString, IsOptional, IsNumber, Min, Max, IsIn, IsISO8601 } from 'class-validator';
 
 export class CreateEventDto {
   @IsString()
@@ -16,5 +16,6 @@ export class CreateEventDto {
   @IsOptional()
   @IsNumber()
   @Min(1)
+  @Max(60)
   reminderMinutes?: number;
 }
