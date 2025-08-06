@@ -1,1 +1,11 @@
-[]
+[
+  {
+    "id": "35ce58bf-d211-43b2-868d-a3eff929327a",
+    "title": "Team Meeting",
+    "startTime": "2025-08-05T14:00:00Z",
+    "endTime": "2025-08-05T15:00:00Z",
+    "recurrence": "none",
+    "reminderMinutes": 30
+  }
+  
+]
