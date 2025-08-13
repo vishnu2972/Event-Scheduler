@@ -1,28 +1,165 @@
 {
   "info": {
-    "name": "Event Scheduler API",
-    "_postman_id": "dummy-id",
+    "name": "Event Scheduler API (Updated - Daily Time Only)",
+    "_postman_id": "6f1dbaf8-0c9f-49c7-8b6e-123456789abc",
+    "description": "Collection for Event Scheduler API with daily time-only inputs and ISO for non-daily.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
     {
-      "name": "Create Event",
+      "name": "Create Event (non-daily, ISO)",
       "request": {
         "method": "POST",
-        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": {
+          "raw": "http://localhost:3000/events",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3000",
+          "path": ["events"]
+        },
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"title\": \"Team Meeting\",\n  \"startTime\": \"2025-08-05T14:00:00Z\",\n  \"endTime\": \"2025-08-05T15:00:00Z\",\n  \"recurrence\": \"none\",\n  \"reminderMinutes\": 30\n}"
+          "raw": "{\n  \"title\": \"Release Planning\",\n  \"recurrence\": \"none\",\n  \"startTime\": \"2025-08-20T10:00:00Z\",\n  \"endTime\": \"2025-08-20T11:00:00Z\",\n  \"reminderMinutes\": 15\n}"
+        }
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Status is 201 or 200\", () => pm.expect(pm.response.code).to.be.oneOf([200,201]));",
+              "const json = pm.response.json();",
+              "pm.test(\"Has required fields\", () => {",
+              "  pm.expect(json).to.have.property('id');",
+              "  pm.expect(json).to.have.property('title');",
+              "  pm.expect(json).to.have.property('recurrence', 'none');",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Create Event (daily, HH:mm only)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": {
+          "raw": "http://localhost:3000/events",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3000",
+          "path": ["events"]
         },
-        "url": { "raw": "http://localhost:3000/events", "host": ["localhost"], "port": "3000", "path": ["events"] }
-      }
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"title\": \"Daily Standup\",\n  \"recurrence\": \"daily\",\n  \"startTimeOfDay\": \"10:00\",\n  \"endTimeOfDay\": \"10:15\",\n  \"reminderMinutes\": 10\n}"
+        }
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Status is 201 or 200\", () => pm.expect(pm.response.code).to.be.oneOf([200,201]));",
+              "const json = pm.response.json();",
+              "pm.test(\"Has required fields\", () => {",
+              "  pm.expect(json).to.have.property('id');",
+              "  pm.expect(json).to.have.property('recurrence', 'daily');",
+              "  pm.expect(json).to.have.property('startTimeOfDay', '10:00');",
+              "  pm.expect(json).to.have.property('endTimeOfDay', '10:15');",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
     },
     {
       "name": "Get Today's Events",
       "request": {
         "method": "GET",
-        "url": { "raw": "http://localhost:3000/events/today", "host": ["localhost"], "port": "3000", "path": ["events", "today"] }
-      }
+        "header": [],
+        "url": {
+          "raw": "http://localhost:3000/events/today",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3000",
+          "path": ["events", "today"]
+        }
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+              "const arr = pm.response.json();",
+              "pm.test(\"Array response\", () => pm.expect(arr).to.be.an('array'));",
+              "if (arr.length) {",
+              "  pm.test(\"Each event has essential fields\", () => {",
+              "    arr.forEach(e => {",
+              "      pm.expect(e).to.have.property('title');",
+              "      pm.expect(e).to.have.property('recurrence');",
+              "      // For daily, API materializes today's ISO times",
+              "      pm.expect(e).to.have.property('startTime');",
+              "      pm.expect(e).to.have.property('endTime');",
+              "    });",
+              "  });",
+              "}"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Create Conflict (expects 400)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": {
+          "raw": "http://localhost:3000/events",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3000",
+          "path": ["events"]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"title\": \"Overlap Check\",\n  \"recurrence\": \"daily\",\n  \"startTimeOfDay\": \"10:05\",\n  \"endTimeOfDay\": \"10:20\",\n  \"reminderMinutes\": 5\n}"
+        },
+        "description": "Run this after creating a daily 10:00–10:15 event; should overlap and return 400."
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Should be 400 on conflict\", () => pm.expect(pm.response.code).to.equal(400));",
+              "try {",
+              "  const json = pm.response.json();",
+              "  pm.test(\"Has conflict message\", () => pm.expect(String(json.message)).to.include('Time conflict'));",
+              "} catch (e) {",
+              "  console.log('Non-JSON error response');",
+              "}"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
     }
   ]
 }
