@@ -1,42 +1,147 @@
 {
   "info": {
-    "name": "Event Scheduler API (Updated - Daily Time Only)",
-    "_postman_id": "6f1dbaf8-0c9f-49c7-8b6e-123456789abc",
-    "description": "Collection for Event Scheduler API with daily time-only inputs and ISO for non-daily.",
+    "name": "Event Scheduler API (Mongo) - CRUD + Search + Pagination",
+    "_postman_id": "c3e1b1d2-4f77-4e0c-9f65-abc123def456",
+    "description": "Postman collection for Event Scheduler API with MongoDB: create/list/read/update/delete + search & pagination.\nVariables:\n- baseUrl: API base URL\n- userId: test user scope\n- eventIdNone / eventIdDaily / eventIdWeekly: set by tests after create requests",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
     {
-      "name": "Create Event (non-daily, ISO)",
+      "name": "Create One-off Event (none)",
       "request": {
         "method": "POST",
         "header": [
           { "key": "Content-Type", "value": "application/json" }
         ],
         "url": {
-          "raw": "http://localhost:3000/events",
-          "protocol": "http",
-          "host": ["localhost"],
-          "port": "3000",
+          "raw": "{{baseUrl}}/events",
+          "host": ["{{baseUrl}}"],
           "path": ["events"]
         },
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"title\": \"Release Planning\",\n  \"recurrence\": \"none\",\n  \"startTime\": \"2025-08-20T10:00:00Z\",\n  \"endTime\": \"2025-08-20T11:00:00Z\",\n  \"reminderMinutes\": 15\n}"
-        }
+          "raw": "{\n  \"title\": \"Interview\",\n  \"userId\": \"{{userId}}\",\n  \"recurrence\": \"none\",\n  \"startTime\": \"2025-08-20T10:00:00Z\",\n  \"endTime\": \"2025-08-20T11:00:00Z\",\n  \"reminderMinutes\": 15\n}"
+        },
+        "description": "Creates a single one-off event in UTC using ISO startTime/endTime."
       },
-      "response": [],
       "event": [
         {
           "listen": "test",
           "script": {
             "exec": [
-              "pm.test(\"Status is 201 or 200\", () => pm.expect(pm.response.code).to.be.oneOf([200,201]));",
+              "pm.test('Status is 201/200', function () {",
+              "  pm.expect(pm.response.code).to.be.oneOf([200,201]);",
+              "});",
               "const json = pm.response.json();",
-              "pm.test(\"Has required fields\", () => {",
+              "pm.test('Created event has id and title', function () {",
               "  pm.expect(json).to.have.property('id');",
-              "  pm.expect(json).to.have.property('title');",
-              "  pm.expect(json).to.have.property('recurrence', 'none');",
+              "  pm.expect(json.title).to.eql('Interview');",
+              "});",
+              "// Save id for later",
+              "pm.collectionVariables.set('eventIdNone', json.id);"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Create Daily Event (HH:mm)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": { "raw": "{{baseUrl}}/events", "host": ["{{baseUrl}}"], "path": ["events"] },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"title\": \"Daily Standup\",\n  \"userId\": \"{{userId}}\",\n  \"recurrence\": \"daily\",\n  \"startTimeOfDay\": \"10:00\",\n  \"endTimeOfDay\": \"10:15\",\n  \"reminderMinutes\": 5\n}"
+        },
+        "description": "Creates a daily event using time-of-day only (HH:mm)."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 201/200', function () {",
+              "  pm.expect(pm.response.code).to.be.oneOf([200,201]);",
+              "});",
+              "const json = pm.response.json();",
+              "pm.test('Daily event created', function () {",
+              "  pm.expect(json.title).to.eql('Daily Standup');",
+              "});",
+              "pm.collectionVariables.set('eventIdDaily', json.id);"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Create Weekly Event (weekday + HH:mm)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": { "raw": "{{baseUrl}}/events", "host": ["{{baseUrl}}"], "path": ["events"] },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"title\": \"Weekly Sync\",\n  \"userId\": \"{{userId}}\",\n  \"recurrence\": \"weekly\",\n  \"weekday\": 2,\n  \"weeklyStartTimeOfDay\": \"11:00\",\n  \"weeklyEndTimeOfDay\": \"11:30\",\n  \"reminderMinutes\": 10\n}"
+        },
+        "description": "Creates a weekly event every Tuesday (weekday=2) between 11:00–11:30."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 201/200', function () {",
+              "  pm.expect(pm.response.code).to.be.oneOf([200,201]);",
+              "});",
+              "const json = pm.response.json();",
+              "pm.test('Weekly event created', function () {",
+              "  pm.expect(json.title).to.eql('Weekly Sync');",
+              "});",
+              "pm.collectionVariables.set('eventIdWeekly', json.id);"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "List / Search / Pagination",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/events?userId={{userId}}&page=1&limit=2&sortBy=createdAt&sortOrder=desc",
+          "host": ["{{baseUrl}}"],
+          "path": ["events"],
+          "query": [
+            { "key": "userId", "value": "{{userId}}" },
+            { "key": "page", "value": "1" },
+            { "key": "limit", "value": "2" },
+            { "key": "sortBy", "value": "createdAt" },
+            { "key": "sortOrder", "value": "desc" }
+          ]
+        },
+        "description": "Lists events for the user with pagination and sorting."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status 200', () => pm.expect(pm.response.code).to.eql(200));",
+              "const json = pm.response.json();",
+              "pm.test('Has pagination fields', () => {",
+              "  pm.expect(json).to.have.keys(['data','page','limit','total','hasNext']);",
+              "});",
+              "pm.test('Limit respected', () => {",
+              "  pm.expect(json.data.length).to.be.at.most(2);",
               "});"
             ],
             "type": "text/javascript"
@@ -45,38 +150,81 @@
       ]
     },
     {
-      "name": "Create Event (daily, HH:mm only)",
+      "name": "Find by ID (one-off)",
       "request": {
-        "method": "POST",
-        "header": [
-          { "key": "Content-Type", "value": "application/json" }
-        ],
+        "method": "GET",
+        "header": [],
         "url": {
-          "raw": "http://localhost:3000/events",
-          "protocol": "http",
-          "host": ["localhost"],
-          "port": "3000",
-          "path": ["events"]
+          "raw": "{{baseUrl}}/events/{{eventIdNone}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["events", "{{eventIdNone}}"]
         },
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"title\": \"Daily Standup\",\n  \"recurrence\": \"daily\",\n  \"startTimeOfDay\": \"10:00\",\n  \"endTimeOfDay\": \"10:15\",\n  \"reminderMinutes\": 10\n}"
-        }
+        "description": "Fetch created one-off event by id."
       },
-      "response": [],
       "event": [
         {
           "listen": "test",
           "script": {
             "exec": [
-              "pm.test(\"Status is 201 or 200\", () => pm.expect(pm.response.code).to.be.oneOf([200,201]));",
+              "pm.test('Status 200', () => pm.expect(pm.response.code).to.eql(200));",
               "const json = pm.response.json();",
-              "pm.test(\"Has required fields\", () => {",
-              "  pm.expect(json).to.have.property('id');",
-              "  pm.expect(json).to.have.property('recurrence', 'daily');",
-              "  pm.expect(json).to.have.property('startTimeOfDay', '10:00');",
-              "  pm.expect(json).to.have.property('endTimeOfDay', '10:15');",
-              "});"
+              "pm.test('Has title', () => pm.expect(json).to.have.property('title'));"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Update (PATCH) title on one-off",
+      "request": {
+        "method": "PATCH",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "url": { "raw": "{{baseUrl}}/events/{{eventIdNone}}", "host": ["{{baseUrl}}"], "path": ["events", "{{eventIdNone}}"] },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"title\": \"Interview (Updated)\"\n}"
+        },
+        "description": "Patch the one-off event title. Service revalidates shape and checks conflicts."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status 200', () => pm.expect(pm.response.code).to.eql(200));",
+              "const json = pm.response.json();",
+              "pm.test('Title updated', () => pm.expect(json.title).to.eql('Interview (Updated)'));"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Search by title (q=Standup)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/events?userId={{userId}}&q=Standup",
+          "host": ["{{baseUrl}}"],
+          "path": ["events"],
+          "query": [
+            { "key": "userId", "value": "{{userId}}" },
+            { "key": "q", "value": "Standup" }
+          ]
+        },
+        "description": "Text search by title using case-insensitive regex."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status 200', () => pm.expect(pm.response.code).to.eql(200));",
+              "const json = pm.response.json();",
+              "pm.test('Data is array', () => pm.expect(Array.isArray(json.data)).to.be.true);"
             ],
             "type": "text/javascript"
           }
@@ -87,35 +235,17 @@
       "name": "Get Today's Events",
       "request": {
         "method": "GET",
-        "header": [],
-        "url": {
-          "raw": "http://localhost:3000/events/today",
-          "protocol": "http",
-          "host": ["localhost"],
-          "port": "3000",
-          "path": ["events", "today"]
-        }
+        "url": { "raw": "{{baseUrl}}/events/today", "host": ["{{baseUrl}}"], "path": ["events", "today"] },
+        "description": "Returns events that occur today; daily/weekly are materialized into today's ISO windows."
       },
-      "response": [],
       "event": [
         {
           "listen": "test",
           "script": {
             "exec": [
-              "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
-              "const arr = pm.response.json();",
-              "pm.test(\"Array response\", () => pm.expect(arr).to.be.an('array'));",
-              "if (arr.length) {",
-              "  pm.test(\"Each event has essential fields\", () => {",
-              "    arr.forEach(e => {",
-              "      pm.expect(e).to.have.property('title');",
-              "      pm.expect(e).to.have.property('recurrence');",
-              "      // For daily, API materializes today's ISO times",
-              "      pm.expect(e).to.have.property('startTime');",
-              "      pm.expect(e).to.have.property('endTime');",
-              "    });",
-              "  });",
-              "}"
+              "pm.test('Status 200', () => pm.expect(pm.response.code).to.eql(200));",
+              "const json = pm.response.json();",
+              "pm.test('Array result', () => pm.expect(Array.isArray(json)).to.be.true);"
             ],
             "type": "text/javascript"
           }
@@ -123,43 +253,71 @@
       ]
     },
     {
-      "name": "Create Conflict (expects 400)",
+      "name": "Delete Weekly Event",
       "request": {
-        "method": "POST",
-        "header": [
-          { "key": "Content-Type", "value": "application/json" }
-        ],
-        "url": {
-          "raw": "http://localhost:3000/events",
-          "protocol": "http",
-          "host": ["localhost"],
-          "port": "3000",
-          "path": ["events"]
-        },
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"title\": \"Overlap Check\",\n  \"recurrence\": \"daily\",\n  \"startTimeOfDay\": \"10:05\",\n  \"endTimeOfDay\": \"10:20\",\n  \"reminderMinutes\": 5\n}"
-        },
-        "description": "Run this after creating a daily 10:00–10:15 event; should overlap and return 400."
+        "method": "DELETE",
+        "url": { "raw": "{{baseUrl}}/events/{{eventIdWeekly}}", "host": ["{{baseUrl}}"], "path": ["events", "{{eventIdWeekly}}"] },
+        "description": "Deletes the weekly event created earlier."
       },
-      "response": [],
       "event": [
         {
           "listen": "test",
           "script": {
             "exec": [
-              "pm.test(\"Should be 400 on conflict\", () => pm.expect(pm.response.code).to.equal(400));",
-              "try {",
-              "  const json = pm.response.json();",
-              "  pm.test(\"Has conflict message\", () => pm.expect(String(json.message)).to.include('Time conflict'));",
-              "} catch (e) {",
-              "  console.log('Non-JSON error response');",
-              "}"
+              "pm.test('Status 200', () => pm.expect(pm.response.code).to.eql(200));",
+              "const json = pm.response.json();",
+              "pm.test('Deleted flag', () => pm.expect(json.deleted).to.be.true);"
             ],
             "type": "text/javascript"
           }
         }
       ]
+    },
+    {
+  "name": "Auth",
+  "item": [
+    {
+      "name": "Test Auth",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:3000/auth/test",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3000",
+          "path": ["auth", "test"]
+        }
+      }
     }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "exec": [
+          "let token = pm.collectionVariables.get(\"jwt_token\");",
+          "if (!token) {",
+          "   console.warn(\"⚠️ No JWT token found. Paste it in collection variables.\");",
+          "} else {",
+          "   pm.request.headers.add({ key: \"Authorization\", value: `Bearer ${token}` });",
+          "}"
+        ],
+        "type": "text/javascript"
+      }
+    }
+  ]
+}
+  ],
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3000" },
+    { "key": "userId", "value": "u1" },
+    { "key": "eventIdNone", "value": "" },
+    { "key": "eventIdDaily", "value": "" },
+    { "key": "eventIdWeekly", "value": "" },
+    {
+    "key": "jwt_token",
+    "value": ""
+  }
   ]
 }

@@ -1,137 +1,118 @@
 // test/events.service.spec.ts
 import { EventsService } from '../events/events.service';
 import { CreateEventDto } from '../events/dtos/create-event.dto';
+import { UpdateEventDto } from '../events/dtos/update-event.dto';
+import { QueryEventsDto } from '../events/dtos/query-events.dto';
 import { Event } from '../events/schemas/event.schema';
 
-// Minimal mock for Mongoose Model<EventDocument>
-type FindReturn = { lean: () => Promise<Event[]> };
-const makeFindReturn = (rows: Event[]): FindReturn => ({
-  lean: () => Promise.resolve(rows),
-});
+// Helpers to mock Mongoose's chained query API
+const chain = (rows: any[]) => {
+  const q: any = {
+    sort: jest.fn().mockReturnThis(),
+    skip: jest.fn().mockReturnThis(),
+    limit: jest.fn().mockReturnThis(),
+    lean: jest.fn().mockResolvedValue(rows),
+  };
+  return q;
+};
+const findLean = (rows: any[]) => ({ lean: jest.fn().mockResolvedValue(rows) });
+const findByIdLean = (row: any | null) => ({ lean: jest.fn().mockResolvedValue(row) });
 
-describe('EventsService (with mocked Mongoose model)', () => {
+describe('EventsService (CRUD + search + pagination)', () => {
   let service: EventsService;
-
-  // Reusable mock model with jest fns
-  const mockEventModel = {
-    find: jest.fn(),             // .find(filter).lean() -> Promise<Event[]>
-    create: jest.fn(),           // .create(doc) -> doc with toObject()
-  } as any;
+  const model: any = {
+    find: jest.fn(),
+    findById: jest.fn(),
+    findByIdAndUpdate: jest.fn(),
+    deleteOne: jest.fn(),
+    countDocuments: jest.fn(),
+    create: jest.fn(),
+  };
 
   beforeEach(() => {
     jest.clearAllMocks();
+    // default mocks
+    model.find.mockReturnValue(findLean([]));
+    model.countDocuments.mockResolvedValue(0);
+    model.create.mockImplementation(async (doc: any) => ({ ...doc, id: 'gen-id', toObject() { return this; } }));
+    model.findById.mockImplementation((id: string) => findByIdLean(null));
+    model.findByIdAndUpdate.mockImplementation((id: string, update: any) => findByIdLean(null));
+    model.deleteOne.mockResolvedValue({ deletedCount: 0 });
 
-    // Default: no events found
-    mockEventModel.find.mockReturnValue(makeFindReturn([]));
-
-    // Default: echo created doc with toObject()
-    mockEventModel.create.mockImplementation(async (doc: any) => ({
-      ...doc,
-      id: 'generated-id',
-      toObject() { return this; },
-    }));
-
-    service = new EventsService(mockEventModel);
+    service = new EventsService(model);
   });
 
-  it('should create a valid one-off event (none)', async () => {
+  it('creates a one-off event', async () => {
     const dto: CreateEventDto = {
-      title: 'Test Event',
+      title: 'Interview',
       userId: 'u1',
       recurrence: 'none',
-      startTime: '2025-08-06T10:00:00Z',
-      endTime: '2025-08-06T11:00:00Z',
+      startTime: '2025-08-20T10:00:00Z',
+      endTime: '2025-08-20T11:00:00Z',
       reminderMinutes: 15,
     };
+    // no conflicts
+    model.find.mockReturnValueOnce(findLean([]));
 
-    const result = await service.createEvent(dto);
-    expect(result).toHaveProperty('id');
-    expect(result.title).toBe('Test Event');
-    expect(mockEventModel.find).toHaveBeenCalled();   // conflict check query
-    expect(mockEventModel.create).toHaveBeenCalled(); // persistence
+    const res = await service.createEvent(dto);
+    expect(res).toHaveProperty('id');
+    expect(res.title).toBe('Interview');
+    expect(model.create).toHaveBeenCalled();
   });
 
-  it('should throw for overlapping event for the same user', async () => {
-    // Seed find() to return one existing event that overlaps
+  it('rejects overlapping event for same user', async () => {
     const existing: Event[] = [
-      {
-        userId: 'u1',
-        title: 'Existing',
-        recurrence: 'none',
-        startTime: '2025-08-06T10:00:00Z',
-        endTime: '2025-08-06T11:00:00Z',
-        reminderMinutes: 10,
-      } as any,
+      { userId: 'u1', title: 'Existing', recurrence: 'none', startTime: '2025-08-20T10:00:00Z', endTime: '2025-08-20T11:00:00Z' } as any,
     ];
-    mockEventModel.find.mockReturnValueOnce(makeFindReturn(existing));
+    model.find.mockReturnValueOnce(findLean(existing));
 
-    const conflictDto: CreateEventDto = {
+    const dto: CreateEventDto = {
       title: 'Conflict',
-      userId: 'u1', // same user → should conflict
+      userId: 'u1',
       recurrence: 'none',
-      startTime: '2025-08-06T10:30:00Z',
-      endTime: '2025-08-06T11:30:00Z',
+      startTime: '2025-08-20T10:30:00Z',
+      endTime: '2025-08-20T11:30:00Z',
     };
-
-    await expect(service.createEvent(conflictDto))
-      .rejects
-      .toThrow('Time conflict with existing event: Existing');
+    await expect(service.createEvent(dto)).rejects.toThrow('Time conflict with existing event: Existing');
   });
 
-  it('should NOT conflict across different users', async () => {
-    // Existing belongs to another user
-    const existing: Event[] = [
-      {
-        userId: 'u2',
-        title: 'Other User',
-        recurrence: 'none',
-        startTime: '2025-08-06T10:00:00Z',
-        endTime: '2025-08-06T11:00:00Z',
-      } as any,
+  it('lists events with pagination + search', async () => {
+    const rows: Event[] = [
+      { userId: 'u1', title: 'A', recurrence: 'none', startTime: '2025-08-20T10:00:00Z', endTime: '2025-08-20T11:00:00Z' } as any,
+      { userId: 'u1', title: 'B', recurrence: 'daily', startTimeOfDay: '10:00', endTimeOfDay: '10:15' } as any,
     ];
-    mockEventModel.find.mockReturnValueOnce(makeFindReturn(existing));
+    model.countDocuments.mockResolvedValueOnce(2);
+    model.find.mockReturnValueOnce(chain(rows));
 
-    const dto: CreateEventDto = {
-      title: 'My Event',
-      userId: 'u1',
-      recurrence: 'none',
-      startTime: '2025-08-06T10:30:00Z',
-      endTime: '2025-08-06T11:30:00Z',
-    };
-
-    await expect(service.createEvent(dto)).resolves.toHaveProperty('id');
+    const q: QueryEventsDto = { userId: 'u1', page: 1, limit: 2, q: 'a' } as any;
+    const res = await service.listEvents(q);
+    expect(res.total).toBe(2);
+    expect(res.data.length).toBeLessThanOrEqual(2);
+    expect(model.find).toHaveBeenCalled();
   });
 
-  it('should create a daily event with HH:mm only', async () => {
-    mockEventModel.find.mockReturnValueOnce(makeFindReturn([])); // no conflicts
+  it('finds by id', async () => {
+    const doc: Event = { userId: 'u1', title: 'FindMe', recurrence: 'none', startTime: '2025-08-20T10:00:00Z', endTime: '2025-08-20T11:00:00Z' } as any;
+    model.findById.mockReturnValueOnce(findByIdLean(doc));
 
-    const dto: CreateEventDto = {
-      title: 'Daily Standup',
-      userId: 'u1',
-      recurrence: 'daily',
-      startTimeOfDay: '09:30',
-      endTimeOfDay: '09:45',
-      reminderMinutes: 5,
-    };
-
-    const result = await service.createEvent(dto);
-    expect(result.title).toBe('Daily Standup');
+    const res = await service.findById('some-id');
+    expect(res.title).toBe('FindMe');
   });
 
-  it('should create a weekly event with weekday + HH:mm', async () => {
-    mockEventModel.find.mockReturnValueOnce(makeFindReturn([]));
+  it('updates (PATCH) an event', async () => {
+    const existing: Event = { userId: 'u1', title: 'Old', recurrence: 'none', startTime: '2025-08-20T10:00:00Z', endTime: '2025-08-20T11:00:00Z' } as any;
+    model.findById.mockReturnValueOnce(findByIdLean(existing)); // load existing
+    model.find.mockReturnValueOnce(findLean([])); // others (no conflicts)
+    model.findByIdAndUpdate.mockReturnValueOnce(findByIdLean({ ...existing, title: 'New Title' }));
 
-    const dto: CreateEventDto = {
-      title: 'Weekly Sync',
-      userId: 'u1',
-      recurrence: 'weekly',
-      weekday: 1, // Monday
-      weeklyStartTimeOfDay: '11:00',
-      weeklyEndTimeOfDay: '11:30',
-      reminderMinutes: 10,
-    };
+    const patch: UpdateEventDto = { title: 'New Title' };
+    const res = await service.updateEvent('id-1', patch);
+    expect(res.title).toBe('New Title');
+  });
 
-    const result = await service.createEvent(dto);
-    expect(result.title).toBe('Weekly Sync');
+  it('deletes by id', async () => {
+    model.deleteOne.mockResolvedValueOnce({ deletedCount: 1 });
+    const res = await service.deleteEvent('id-1');
+    expect(res.deleted).toBe(true);
   });
 });

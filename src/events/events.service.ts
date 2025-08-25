@@ -1,15 +1,17 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 
 import { CreateEventDto } from './dtos/create-event.dto';
+import { UpdateEventDto } from './dtos/update-event.dto';
+import { QueryEventsDto } from './dtos/query-events.dto';
 import { Event, EventDocument } from './schemas/event.schema';
 
 dayjs.extend(utc);
 
-/* ------------- Helpers ------------- */
+/* ---------------- Helpers ---------------- */
 function minutesOfDayFromHHMM(hhmm?: string): number {
   if (typeof hhmm !== 'string') {
     throw new BadRequestException('Time-of-day (HH:mm) is required.');
@@ -30,105 +32,33 @@ function overlapsByMinutes(aStart: number, aEnd: number, bStart: number, bEnd: n
   return aStart < bEnd && aEnd > bStart;
 }
 
-/* ------------- Service ------------- */
+/* ---------------- Service ---------------- */
 @Injectable()
 export class EventsService {
   constructor(
     @InjectModel(Event.name) private readonly eventModel: Model<EventDocument>,
   ) {}
 
+  /* ---------- CREATE ---------- */
   async createEvent(dto: CreateEventDto): Promise<Event> {
-    const { userId, title, recurrence, reminderMinutes } = dto;
-    if (!userId) throw new BadRequestException('userId is required');
+    // shape guards
+    this.validateShape(dto);
 
-    // Shapes per recurrence
-    if (recurrence === 'none') {
-      if (!dto.startTime || !dto.endTime)
-        throw new BadRequestException('For recurrence=none, startTime and endTime (ISO) are required.');
-      if (dto.startTimeOfDay || dto.endTimeOfDay || dto.weekday !== undefined ||
-          dto.weeklyStartTimeOfDay || dto.weeklyEndTimeOfDay) {
-        throw new BadRequestException('For recurrence=none, do not send daily/weekly fields.');
-      }
-    }
-    if (recurrence === 'daily') {
-      if (!dto.startTimeOfDay || !dto.endTimeOfDay)
-        throw new BadRequestException('For recurrence=daily, startTimeOfDay and endTimeOfDay are required.');
-      if (dto.startTime || dto.endTime || dto.weekday !== undefined ||
-          dto.weeklyStartTimeOfDay || dto.weeklyEndTimeOfDay) {
-        throw new BadRequestException('For recurrence=daily, do not send ISO or weekly fields.');
-      }
-    }
-    if (recurrence === 'weekly') {
-      if (
-        dto.weekday === undefined ||
-        dto.weekday === null ||
-        dto.weeklyStartTimeOfDay === undefined ||
-        dto.weeklyEndTimeOfDay === undefined
-      ) {
-        throw new BadRequestException('For recurrence=weekly, weekday (0..6) and weeklyStart/EndTimeOfDay are required.');
-      }
-      if (dto.startTime || dto.endTime || dto.startTimeOfDay || dto.endTimeOfDay) {
-        throw new BadRequestException('For recurrence=weekly, do not send ISO or daily fields.');
-      }
-      if (dto.weekday < 0 || dto.weekday > 6) {
-        throw new BadRequestException('weekday must be between 0 (Sun) and 6 (Sat).');
-      }
-    }
+    // ordering + reminder
+    this.validateOrderingAndReminder(dto);
 
-    // Ordering + reminder validation
-    if (recurrence === 'none') {
-      const start = dayjs.utc(dto.startTime!);
-      const end = dayjs.utc(dto.endTime!);
-      if (!start.isValid() || !end.isValid()) throw new BadRequestException('Invalid ISO startTime/endTime');
-      if (!start.isBefore(end)) throw new BadRequestException('Start time must be before end time');
-
-      if (typeof reminderMinutes === 'number') {
-        if (reminderMinutes < 0 || reminderMinutes > 60) {
-          throw new BadRequestException('reminderMinutes must be between 0 and 60');
-        }
-        const reminderInstant = start.subtract(reminderMinutes, 'minute');
-        if (!reminderInstant.isBefore(start)) {
-          throw new BadRequestException('Reminder must be before event start time');
-        }
-      }
-    }
-    if (recurrence === 'daily') {
-      const startM = minutesOfDayFromHHMM(dto.startTimeOfDay);
-      const endM = minutesOfDayFromHHMM(dto.endTimeOfDay);
-      if (!(startM < endM)) throw new BadRequestException('startTimeOfDay must be before endTimeOfDay');
-
-      if (typeof reminderMinutes === 'number') {
-        if (reminderMinutes < 0 || reminderMinutes > 60) {
-          throw new BadRequestException('reminderMinutes must be between 0 and 60');
-        }
-        // Optional: if you only allow same-day reminders, enforce reminderMinutes <= startM
-      }
-    }
-    if (recurrence === 'weekly') {
-      const startM = minutesOfDayFromHHMM(dto.weeklyStartTimeOfDay);
-      const endM = minutesOfDayFromHHMM(dto.weeklyEndTimeOfDay);
-      if (!(startM < endM)) throw new BadRequestException('weeklyStartTimeOfDay must be before weeklyEndTimeOfDay');
-
-      if (typeof reminderMinutes === 'number') {
-        if (reminderMinutes < 0 || reminderMinutes > 60) {
-          throw new BadRequestException('reminderMinutes must be between 0 and 60');
-        }
-      }
-    }
-
-    // Pull only this user's events and check conflicts in memory (simple, OK for MVP)
-    const userEvents = await this.eventModel.find({ userId }).lean<Event[]>();
+    // conflicts (same user)
+    const userEvents = await this.eventModel.find({ userId: dto.userId }).lean<Event[]>();
     for (const existing of userEvents) {
       if (this.hasConflict(dto, existing)) {
         throw new BadRequestException(`Time conflict with existing event: ${existing.title}`);
       }
     }
 
-    // Save
     const created = await this.eventModel.create({
-      userId,
-      title,
-      recurrence,
+      userId: dto.userId,
+      title: dto.title,
+      recurrence: dto.recurrence,
       startTime: dto.startTime,
       endTime: dto.endTime,
       startTimeOfDay: dto.startTimeOfDay,
@@ -141,11 +71,11 @@ export class EventsService {
     return created.toObject();
   }
 
+  /* ---------- READ: TODAY ---------- */
   async getTodaysEvents(): Promise<Event[]> {
     const todayStart = dayjs.utc().startOf('day');
     const weekday = todayStart.day(); // 0..6
 
-    // Fetch only potentially relevant events to reduce memory; you can expand filters further if needed
     const candidates = await this.eventModel.find({
       $or: [
         { recurrence: 'daily' },
@@ -183,11 +113,243 @@ export class EventsService {
     });
   }
 
-  async getEventsByUserId(userId: string): Promise<Event[]> {
-    return this.eventModel.find({ userId }).lean<Event[]>();
+  /* ---------- READ: SEARCH + PAGINATION ---------- */
+  async listEvents(q: QueryEventsDto): Promise<{
+    data: Event[];
+    page: number;
+    limit: number;
+    total: number;
+    hasNext: boolean;
+  }> {
+    const {
+      userId,
+      recurrence,
+      q: text,
+      from,
+      to,
+      weekday,
+      page = 1,
+      limit = 20,
+      sortBy = 'createdAt',
+      sortOrder = 'desc',
+    } = q;
+
+    const filter: any = { userId };
+
+    if (recurrence) filter.recurrence = recurrence;
+    if (typeof weekday === 'number') filter.weekday = weekday;
+    if (text) filter.title = { $regex: text, $options: 'i' };
+
+    // Range (applies to one-off startTime)
+    if (from || to) {
+      filter.startTime = {};
+      if (from) filter.startTime.$gte = from;
+      if (to) filter.startTime.$lt = to;
+    }
+
+    const skip = (page - 1) * limit;
+    const total = await this.eventModel.countDocuments(filter);
+    const data = await this.eventModel
+      .find(filter)
+      .sort({ [sortBy]: sortOrder === 'asc' ? 1 : -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean<Event[]>();
+
+    return {
+      data,
+      page,
+      limit,
+      total,
+      hasNext: page * limit < total,
+    };
   }
 
-  /* -------- Conflict logic (same as file-based) -------- */
+  /* ---------- READ: BY ID ---------- */
+  async findById(id: string): Promise<Event> {
+    const doc = await this.eventModel.findById(id).lean<Event | null>();
+    if (!doc) throw new NotFoundException('Event not found');
+    return doc;
+  }
+
+  /* ---------- UPDATE (PATCH semantics) ---------- */
+  async updateEvent(id: string, patch: UpdateEventDto): Promise<Event> {
+    const existing = await this.eventModel.findById(id).lean<Event | null>();
+    if (!existing) throw new NotFoundException('Event not found');
+
+    // prevent userId change (security)
+    if (patch.userId && patch.userId !== existing.userId) {
+      throw new BadRequestException('Cannot change userId of the event');
+    }
+
+    // Merge → derive a full DTO-like object
+    const merged: CreateEventDto = {
+      // base from existing (convert to DTO shape)
+      userId: existing.userId,
+      title: patch.title ?? existing.title,
+      recurrence: patch.recurrence ?? (existing.recurrence as any),
+      startTime: patch.startTime ?? existing.startTime,
+      endTime: patch.endTime ?? existing.endTime,
+      startTimeOfDay: patch.startTimeOfDay ?? existing.startTimeOfDay,
+      endTimeOfDay: patch.endTimeOfDay ?? existing.endTimeOfDay,
+      weekday: typeof patch.weekday === 'number' ? patch.weekday : existing.weekday,
+      weeklyStartTimeOfDay: patch.weeklyStartTimeOfDay ?? existing.weeklyStartTimeOfDay,
+      weeklyEndTimeOfDay: patch.weeklyEndTimeOfDay ?? existing.weeklyEndTimeOfDay,
+      reminderMinutes: typeof patch.reminderMinutes === 'number'
+        ? patch.reminderMinutes
+        : existing.reminderMinutes,
+    };
+
+    // Normalize fields to match recurrence (strip irrelevant fields)
+    this.stripIrrelevantFieldsByRecurrence(merged);
+
+    // Full validation on the merged payload
+    this.validateShape(merged);
+    this.validateOrderingAndReminder(merged);
+
+    // Conflict check vs other events of same user (exclude self)
+    const others = await this.eventModel.find({
+      userId: merged.userId,
+      _id: { $ne: id },
+    }).lean<Event[]>();
+
+    for (const ev of others) {
+      if (this.hasConflict(merged, ev)) {
+        throw new BadRequestException(`Time conflict with existing event: ${ev.title}`);
+      }
+    }
+
+    // Persist changes
+    const updateDoc: Partial<Event> = {
+      title: merged.title,
+      recurrence: merged.recurrence,
+      startTime: merged.startTime,
+      endTime: merged.endTime,
+      startTimeOfDay: merged.startTimeOfDay,
+      endTimeOfDay: merged.endTimeOfDay,
+      weekday: merged.weekday,
+      weeklyStartTimeOfDay: merged.weeklyStartTimeOfDay,
+      weeklyEndTimeOfDay: merged.weeklyEndTimeOfDay,
+      reminderMinutes: merged.reminderMinutes,
+    };
+
+    const updated = await this.eventModel.findByIdAndUpdate(id, updateDoc, { new: true }).lean<Event | null>();
+    if (!updated) throw new NotFoundException('Event not found after update');
+    return updated;
+  }
+
+  /* ---------- DELETE ---------- */
+  async deleteEvent(id: string): Promise<{ deleted: boolean }> {
+    const res = await this.eventModel.deleteOne({ _id: id });
+    return { deleted: res.deletedCount === 1 };
+  }
+
+  /* ---------- Shape & business validation ---------- */
+  private validateShape(dto: CreateEventDto) {
+    const { recurrence } = dto;
+
+    if (recurrence === 'none') {
+      if (!dto.startTime || !dto.endTime)
+        throw new BadRequestException('For recurrence=none, startTime and endTime (ISO) are required.');
+      if (dto.startTimeOfDay || dto.endTimeOfDay || dto.weekday !== undefined ||
+          dto.weeklyStartTimeOfDay || dto.weeklyEndTimeOfDay) {
+        throw new BadRequestException('For recurrence=none, do not send daily/weekly time-of-day fields.');
+      }
+      return;
+    }
+
+    if (recurrence === 'daily') {
+      if (!dto.startTimeOfDay || !dto.endTimeOfDay)
+        throw new BadRequestException('For recurrence=daily, startTimeOfDay and endTimeOfDay are required.');
+      if (dto.startTime || dto.endTime || dto.weekday !== undefined ||
+          dto.weeklyStartTimeOfDay || dto.weeklyEndTimeOfDay) {
+        throw new BadRequestException('For recurrence=daily, do not send ISO or weekly fields.');
+      }
+      return;
+    }
+
+    if (recurrence === 'weekly') {
+      if (
+        dto.weekday === undefined ||
+        dto.weekday === null ||
+        dto.weeklyStartTimeOfDay === undefined ||
+        dto.weeklyEndTimeOfDay === undefined
+      ) {
+        throw new BadRequestException('For recurrence=weekly, weekday (0..6) and weeklyStart/EndTimeOfDay are required.');
+      }
+      if (dto.startTime || dto.endTime || dto.startTimeOfDay || dto.endTimeOfDay) {
+        throw new BadRequestException('For recurrence=weekly, do not send ISO or daily fields.');
+      }
+      if (dto.weekday < 0 || dto.weekday > 6) {
+        throw new BadRequestException('weekday must be between 0 (Sun) and 6 (Sat).');
+      }
+      return;
+    }
+
+    throw new BadRequestException('Invalid recurrence type.');
+  }
+
+  private validateOrderingAndReminder(dto: CreateEventDto) {
+    const { recurrence, reminderMinutes } = dto;
+
+    if (typeof reminderMinutes === 'number') {
+      if (reminderMinutes < 0 || reminderMinutes > 60) {
+        throw new BadRequestException('reminderMinutes must be between 0 and 60');
+      }
+    }
+
+    if (recurrence === 'none') {
+      const start = dayjs.utc(dto.startTime!);
+      const end = dayjs.utc(dto.endTime!);
+      if (!start.isValid() || !end.isValid()) throw new BadRequestException('Invalid ISO startTime/endTime');
+      if (!start.isBefore(end)) throw new BadRequestException('Start time must be before end time');
+
+      if (typeof reminderMinutes === 'number') {
+        const reminderInstant = start.subtract(reminderMinutes, 'minute');
+        if (!reminderInstant.isBefore(start)) {
+          throw new BadRequestException('Reminder must be before event start time');
+        }
+      }
+      return;
+    }
+
+    if (recurrence === 'daily') {
+      const startM = minutesOfDayFromHHMM(dto.startTimeOfDay);
+      const endM = minutesOfDayFromHHMM(dto.endTimeOfDay);
+      if (!(startM < endM)) throw new BadRequestException('startTimeOfDay must be before endTimeOfDay');
+      return;
+    }
+
+    if (recurrence === 'weekly') {
+      const startM = minutesOfDayFromHHMM(dto.weeklyStartTimeOfDay);
+      const endM = minutesOfDayFromHHMM(dto.weeklyEndTimeOfDay);
+      if (!(startM < endM)) throw new BadRequestException('weeklyStartTimeOfDay must be before weeklyEndTimeOfDay');
+      return;
+    }
+  }
+
+  private stripIrrelevantFieldsByRecurrence(dto: CreateEventDto) {
+    if (dto.recurrence === 'none') {
+      delete dto.startTimeOfDay;
+      delete dto.endTimeOfDay;
+      delete dto.weekday;
+      delete dto.weeklyStartTimeOfDay;
+      delete dto.weeklyEndTimeOfDay;
+    } else if (dto.recurrence === 'daily') {
+      delete dto.startTime;
+      delete dto.endTime;
+      delete dto.weekday;
+      delete dto.weeklyStartTimeOfDay;
+      delete dto.weeklyEndTimeOfDay;
+    } else if (dto.recurrence === 'weekly') {
+      delete dto.startTime;
+      delete dto.endTime;
+      delete dto.startTimeOfDay;
+      delete dto.endTimeOfDay;
+    }
+  }
+
+  /* ----- Conflict logic across types (same user) ----- */
   private hasConflict(newDto: CreateEventDto, existing: Event): boolean {
     const newType = newDto.recurrence;
     const exType = existing.recurrence;
